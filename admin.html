@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>YP Studio — мои работы</title>
+<style>
+body{margin:0 auto;background:#0b0907;color:#efe9df;font:16px/1.5 system-ui,sans-serif;padding:20px;max-width:560px}
+h1{font:italic 400 36px Georgia,serif}
+input,button{font:inherit;width:100%;box-sizing:border-box;padding:14px;margin:6px 0;border-radius:8px;border:1px solid #3a342b;background:#17130f;color:inherit}
+button{background:#e3a94b;color:#111;border:0;font-weight:600}
+button.sm{width:auto;padding:8px 14px;background:#2a2620;color:#efe9df;margin:0}
+.card{background:#12100d;border:1px solid #2a2620;border-radius:12px;padding:16px;margin:16px 0}
+.row{display:flex;gap:12px;align-items:center;padding:8px 0;border-top:1px solid #2a2620}
+.row img{width:56px;height:56px;object-fit:cover;border-radius:6px;background:#2a2620}
+.row span{flex:1;overflow-wrap:anywhere}
+#msg{min-height:24px;color:#e3a94b}
+small{color:#8d867b}
+</style></head><body>
+<h1>Мои работы</h1>
+<details class="card" id="cfg"><summary>Настройки (один раз)</summary>
+<input id="repo" placeholder="Репозиторий: логин/название">
+<input id="tok" type="password" placeholder="GitHub токен">
+<input id="br" placeholder="Ветка (обычно main)">
+<button id="save">Сохранить</button>
+<small>Токен: GitHub → Settings → Developer settings → Fine-grained tokens. Доступ только к этому репозиторию, Contents: Read and write. Токен хранится только в этом браузере.</small></details>
+<div class="card"><b>Добавить фото</b>
+<input id="file" type="file" accept="image/*">
+<input id="title" placeholder="Название съёмки (видно рядом с курсором)">
+<button id="add">Добавить на сайт</button><div id="msg"></div>
+<small>Фото появится на сайте примерно через минуту.</small></div>
+<div class="card"><b>Сейчас на сайте</b><div id="list"></div></div>
+<script>
+const $=s=>document.querySelector(s);
+const L=k=>{try{return localStorage.getItem(k)||''}catch(e){return ''}},S=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+const msg=t=>$('#msg').textContent=t;
+$('#repo').value=L('yp_repo');$('#tok').value=L('yp_tok');$('#br').value=L('yp_br')||'main';
+if(!L('yp_tok'))$('#cfg').open=true;
+$('#save').onclick=()=>{S('yp_repo',$('#repo').value.trim());S('yp_tok',$('#tok').value.trim());S('yp_br',$('#br').value.trim()||'main');msg('Сохранено');load()};
+async function gh(path,method='GET',body){
+  const repo=L('yp_repo'),br=L('yp_br')||'main';
+  const r=await fetch(`https://api.github.com/repos/${repo}/contents/${path}`+(method==='GET'?`?ref=${br}&t=${Date.now()}`:''),{method,cache:'no-store',
+    headers:{Authorization:'Bearer '+L('yp_tok'),Accept:'application/vnd.github+json',...(body?{'Content-Type':'application/json'}:{})},
+    body:body&&JSON.stringify({...body,branch:br})});
+  if(r.status===404&&method==='GET')return null;
+  if(!r.ok)throw new Error(r.status===401?'Неверный токен':r.status===403||r.status===404?'Нет доступа к репозиторию':'Ошибка '+r.status);
+  return r.json();
+}
+const dec=b=>JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\n/g,'')),c=>c.charCodeAt(0))));
+const enc=o=>btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o,null,1))));
+async function getWorks(){const j=await gh('works.json');return j?{list:dec(j.content),sha:j.sha}:{list:[],sha:undefined}}
+const putWorks=(list,sha,m)=>gh('works.json','PUT',{message:m,content:enc(list),sha});
+async function load(){
+  const el=$('#list');if(!L('yp_tok')){el.textContent='Сначала заполните настройки.';return}
+  el.textContent='Загрузка…';
+  try{const {list}=await getWorks();el.innerHTML=list.length?'':'<small>Пока пусто. Пока вы ничего не добавили, на сайте видны примеры.</small>';
+    list.forEach(w=>{const d=document.createElement('div');d.className='row';
+      const im=new Image();im.src=w.src;im.onerror=()=>im.style.visibility='hidden';
+      const t=document.createElement('span');t.textContent=w.title||'Без названия';
+      const b=document.createElement('button');b.className='sm';b.textContent='Убрать';b.onclick=()=>del(w);
+      d.append(im,t,b);el.append(d)})}
+  catch(e){el.textContent=e.message}
+}
+async function del(w){
+  if(!confirm('Убрать «'+(w.title||'фото')+'» с сайта?'))return;
+  try{const {list,sha}=await getWorks();await putWorks(list.filter(x=>x.src!==w.src),sha,'Убрать работу');
+    const f=await gh(w.src);if(f)await gh(w.src,'DELETE',{message:'Удалить фото',sha:f.sha});
+    msg('Убрано. Сайт обновится через минуту.');load()}catch(e){msg(e.message)}
+}
+function shrink(file){return new Promise((res,rej)=>{const im=new Image();im.onload=()=>{const k=Math.min(1,2000/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',.86).split(',')[1])};im.onerror=()=>rej(new Error('Не удалось открыть фото'));im.src=URL.createObjectURL(file)})}
+$('#add').onclick=async()=>{
+  const f=$('#file').files[0];
+  if(!L('yp_tok'))return msg('Сначала заполните настройки');if(!f)return msg('Выберите фото');
+  const b=$('#add');b.disabled=true;msg('Загружаю…');
+  try{const data=await shrink(f),path=`photos/${Date.now()}.jpg`;
+    await gh(path,'PUT',{message:'Добавить фото',content:data});
+    const {list,sha}=await getWorks();list.unshift({src:path,title:$('#title').value.trim()});
+    await putWorks(list,sha,'Добавить работу');
+    $('#file').value='';$('#title').value='';msg('Готово! Фото появится на сайте через минуту.');load()}
+  catch(e){msg(e.message)}
+  b.disabled=false;
+};
+load();
+</script></body></html>
